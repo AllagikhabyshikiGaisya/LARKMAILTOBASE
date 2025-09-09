@@ -1,51 +1,44 @@
 import logging
 import json
 import os
+import re
 import sys
 from datetime import datetime
-from typing import Dict, Any, Optional
+from typing import Dict, Any
 
-# Simple logging setup
+# Simple logging setup for production
 logging.basicConfig(
     level=logging.INFO,
-    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
+    format='%(asctime)s - %(levelname)s - %(message)s',
     handlers=[logging.StreamHandler(sys.stdout)]
 )
 logger = logging.getLogger(__name__)
 
+# Import Flask (pure Python, no compilation)
 try:
-    from fastapi import FastAPI, Request, HTTPException
-    from fastapi.responses import JSONResponse
-    logger.info("FastAPI imported successfully")
-except ImportError as e:
-    logger.error(f"Failed to import FastAPI: {e}")
-    sys.exit(1)
-
-# Simple imports without complex dependencies
-try:
-    from dotenv import load_dotenv
+    from flask import Flask, request, jsonify
     import requests
-    logger.info("Basic dependencies imported successfully")
+    from dotenv import load_dotenv
+    logger.info("All dependencies imported successfully")
 except ImportError as e:
-    logger.error(f"Failed to import basic dependencies: {e}")
+    logger.error(f"Import error: {e}")
     sys.exit(1)
 
 # Load environment variables
 load_dotenv()
 
-# Simple configuration
-class SimpleConfig:
+# Simple Configuration
+class Config:
     LARK_WEBHOOK_URL = os.getenv('LARK_WEBHOOK_URL', '').strip()
     ENVIRONMENT = os.getenv('ENVIRONMENT', 'development').strip()
-    WEBHOOK_PATH = os.getenv('WEBHOOK_PATH', '/webhook/lark-mail').strip()
     TEST_EMAIL = os.getenv('TEST_EMAIL', 'utosabu.adhikari@allagi.jp').strip()
     
     @classmethod
     def is_valid(cls):
         return bool(cls.LARK_WEBHOOK_URL)
 
-# Simple Email Parser
-class SimpleEmailParser:
+# Email Parser Class
+class EmailParser:
     def __init__(self):
         self.patterns = {
             'Event Name': r'イベント名\s*:\s*(.+?)(?=\n|開催日)',
@@ -65,7 +58,6 @@ class SimpleEmailParser:
         }
     
     def parse_email(self, email_content: str) -> Dict[str, Any]:
-        import re
         extracted_data = {'timestamp': datetime.now().isoformat()}
         
         for field_name, pattern in self.patterns.items():
@@ -75,34 +67,40 @@ class SimpleEmailParser:
                     value = match.group(1).strip()
                     value = re.sub(r'\s+', ' ', value).strip()
                     extracted_data[field_name] = value
+                    logger.debug(f"Extracted {field_name}: {value}")
                 else:
                     extracted_data[field_name] = ""
             except Exception as e:
                 logger.error(f"Error extracting {field_name}: {e}")
                 extracted_data[field_name] = ""
         
-        # Handle age
+        # Special handling for age
         if extracted_data.get('Customer Age'):
             age_match = re.search(r'(\d+)', extracted_data['Customer Age'])
             if age_match:
                 extracted_data['Customer Age'] = int(age_match.group(1))
         
+        logger.info(f"Email parsing completed. Extracted {len(extracted_data)} fields.")
         return extracted_data
     
     def validate_required_fields(self, data: Dict[str, Any]) -> bool:
         required_fields = ['Customer Name', 'Customer Email', 'Customer Phone']
+        
         for field in required_fields:
             if not data.get(field) or str(data.get(field)).strip() == "":
+                logger.error(f"Missing required field: {field}")
                 return False
+        
         return True
 
-# Simple Webhook Client
-class SimpleWebhookClient:
+# Webhook Client Class
+class WebhookClient:
     def __init__(self, webhook_url: str):
         self.webhook_url = webhook_url
     
     def send_to_lark_base(self, data: Dict[str, Any]) -> bool:
         try:
+            # Prepare data for Lark Base
             webhook_data = {
                 "timestamp": datetime.now().isoformat(),
                 "event_name": data.get('Event Name', ''),
@@ -124,6 +122,8 @@ class SimpleWebhookClient:
             # Remove empty fields
             webhook_data = {k: v for k, v in webhook_data.items() if v}
             
+            logger.info(f"Sending {len(webhook_data)} fields to Lark Base webhook")
+            
             response = requests.post(
                 self.webhook_url,
                 json=webhook_data,
@@ -131,179 +131,233 @@ class SimpleWebhookClient:
                 timeout=30
             )
             
-            logger.info(f"Webhook response: {response.status_code}")
-            return response.status_code == 200
+            logger.info(f"Webhook response status: {response.status_code}")
             
+            if response.status_code == 200:
+                logger.info("Successfully sent data to Lark Base webhook")
+                return True
+            else:
+                logger.error(f"Webhook failed: {response.status_code} - {response.text}")
+                return False
+                
         except Exception as e:
-            logger.error(f"Webhook error: {e}")
+            logger.error(f"Failed to send data to webhook: {str(e)}")
             return False
     
     def test_connection(self) -> bool:
         try:
-            test_data = {"test": True, "timestamp": datetime.now().isoformat()}
+            test_data = {
+                "test": True,
+                "timestamp": datetime.now().isoformat(),
+                "customer_name": "Test Connection"
+            }
+            
             response = requests.post(
                 self.webhook_url,
                 json=test_data,
                 headers={'Content-Type': 'application/json'},
                 timeout=10
             )
+            
             return response.status_code == 200
-        except:
+            
+        except Exception as e:
+            logger.error(f"Webhook test failed: {str(e)}")
             return False
 
-# Initialize FastAPI
-app = FastAPI(title="Lark Mail Automation", version="1.0.0")
+# Initialize Flask app
+app = Flask(__name__)
 
-# Global components
-email_parser = SimpleEmailParser()
+# Initialize components
+email_parser = EmailParser()
 webhook_client = None
 
-@app.on_event("startup")
-async def startup_event():
-    global webhook_client
-    logger.info("Starting Lark Mail Automation Service...")
-    
-    if SimpleConfig.is_valid():
-        webhook_client = SimpleWebhookClient(SimpleConfig.LARK_WEBHOOK_URL)
-        logger.info("Webhook client initialized")
-        
-        try:
-            if webhook_client.test_connection():
-                logger.info("Webhook test successful")
-            else:
-                logger.warning("Webhook test failed - continuing anyway")
-        except Exception as e:
-            logger.warning(f"Webhook test error: {e}")
-    else:
-        logger.error("Invalid configuration - webhook not initialized")
-    
-    logger.info("Startup complete")
+# Initialize webhook client if config is valid
+if Config.is_valid():
+    webhook_client = WebhookClient(Config.LARK_WEBHOOK_URL)
+    logger.info("Webhook client initialized")
+else:
+    logger.warning("No valid webhook URL configured")
 
-@app.get("/")
-async def root():
-    return {
+@app.route('/', methods=['GET'])
+def root():
+    """Health check and service info"""
+    return jsonify({
         "service": "Lark Mail to Base Automation",
         "status": "running",
         "version": "1.0.0",
-        "environment": SimpleConfig.ENVIRONMENT,
+        "framework": "Flask",
+        "environment": Config.ENVIRONMENT,
         "webhook_configured": bool(webhook_client),
         "timestamp": datetime.now().isoformat()
-    }
+    })
 
-@app.get("/health")
-async def health_check():
+@app.route('/health', methods=['GET'])
+def health_check():
+    """Detailed health check"""
     webhook_ok = False
+    webhook_error = None
+    
     if webhook_client:
         try:
             webhook_ok = webhook_client.test_connection()
-        except:
-            pass
+        except Exception as e:
+            webhook_error = str(e)
     
-    return {
+    return jsonify({
         "status": "healthy" if webhook_ok else "degraded",
         "webhook_connection": webhook_ok,
-        "config_valid": SimpleConfig.is_valid(),
+        "webhook_error": webhook_error,
+        "config_valid": Config.is_valid(),
+        "environment": Config.ENVIRONMENT,
         "timestamp": datetime.now().isoformat()
-    }
+    })
 
-@app.post("/webhook/lark-mail")
-async def handle_webhook(request: Request):
+@app.route('/webhook/lark-mail', methods=['POST'])
+def handle_lark_mail_webhook():
+    """Handle incoming webhook from Lark Mail"""
     if not webhook_client:
-        raise HTTPException(status_code=503, detail="Webhook client not initialized")
+        return jsonify({"error": "Webhook client not initialized"}), 503
     
     try:
-        body = await request.body()
-        if not body:
-            return {"status": "error", "message": "Empty body"}
+        logger.info("Received webhook request from Lark Mail")
         
-        webhook_data = json.loads(body)
+        # Get JSON data
+        webhook_data = request.get_json()
+        if not webhook_data:
+            logger.warning("No JSON data received")
+            return jsonify({"error": "No JSON data"}), 400
         
-        # Handle verification
+        logger.info(f"Webhook data keys: {list(webhook_data.keys())}")
+        
+        # Handle webhook verification
         if webhook_data.get('type') == 'url_verification':
-            return {"challenge": webhook_data.get('challenge', '')}
+            challenge = webhook_data.get('challenge', '')
+            logger.info("Webhook verification request received")
+            return jsonify({"challenge": challenge})
         
         # Handle mail events
         if webhook_data.get('type') != 'event_callback':
-            return {"status": "ignored", "message": "Not a mail event"}
+            logger.info(f"Ignoring webhook type: {webhook_data.get('type')}")
+            return jsonify({"status": "ignored", "message": "Not a mail event"})
         
+        # Extract email content
         event_data = webhook_data.get('event', {})
         email_content = event_data.get('content', '') or event_data.get('mail_content', '')
+        sender = event_data.get('sender', '') or event_data.get('from', '')
         
         if not email_content:
-            return {"status": "error", "message": "No email content"}
+            logger.error("No email content found in webhook")
+            return jsonify({"error": "No email content"}), 400
+        
+        logger.info(f"Processing email from: {sender}")
+        logger.info(f"Email content length: {len(email_content)} characters")
+        
+        # Parse email content
+        extracted_data = email_parser.parse_email(email_content)
+        
+        # Validate required fields
+        if not email_parser.validate_required_fields(extracted_data):
+            logger.error("Email validation failed - missing required fields")
+            return jsonify({
+                "error": "Missing required fields",
+                "extracted_data": extracted_data
+            }), 400
+        
+        # Send data to Lark Base webhook
+        success = webhook_client.send_to_lark_base(extracted_data)
+        
+        if success:
+            customer_name = extracted_data.get('Customer Name', 'Unknown')
+            logger.info(f"Successfully processed email for customer: {customer_name}")
+            return jsonify({
+                "status": "success",
+                "message": "Email processed and data sent to Lark Base successfully",
+                "customer_name": customer_name,
+                "fields_extracted": len(extracted_data)
+            })
+        else:
+            logger.error("Failed to send data to Lark Base webhook")
+            return jsonify({
+                "error": "Failed to send data to Lark Base webhook"
+            }), 500
+            
+    except Exception as e:
+        logger.error(f"Error processing webhook: {str(e)}")
+        return jsonify({"error": f"Internal server error: {str(e)}"}), 500
+
+@app.route('/test/parse', methods=['POST'])
+def test_parse_email():
+    """Test endpoint for parsing email content"""
+    try:
+        email_content = request.get_data(as_text=True)
+        
+        if not email_content:
+            return jsonify({"error": "No email content provided"}), 400
+        
+        logger.info("Testing email parsing...")
+        extracted_data = email_parser.parse_email(email_content)
+        
+        return jsonify({
+            "status": "success",
+            "message": "Email parsed successfully",
+            "extracted_data": extracted_data,
+            "field_count": len(extracted_data)
+        })
+        
+    except Exception as e:
+        logger.error(f"Error in test parse: {str(e)}")
+        return jsonify({"error": str(e)}), 500
+
+@app.route('/test/full', methods=['POST'])
+def test_full_workflow():
+    """Test complete workflow: parse email and send to Lark Base"""
+    if not webhook_client:
+        return jsonify({"error": "Webhook client not initialized"}), 503
+    
+    try:
+        email_content = request.get_data(as_text=True)
+        
+        if not email_content:
+            return jsonify({"error": "No email content provided"}), 400
+        
+        logger.info("Testing complete workflow...")
         
         # Parse email
         extracted_data = email_parser.parse_email(email_content)
         
+        # Validate
         if not email_parser.validate_required_fields(extracted_data):
-            return {"status": "error", "message": "Missing required fields"}
-        
-        # Send to webhook
-        success = webhook_client.send_to_lark_base(extracted_data)
-        
-        if success:
-            return {
-                "status": "success",
-                "message": "Email processed successfully",
-                "customer_name": extracted_data.get('Customer Name', 'Unknown')
-            }
-        else:
-            return {"status": "error", "message": "Failed to send to Lark Base"}
-    
-    except Exception as e:
-        logger.error(f"Webhook error: {e}")
-        raise HTTPException(status_code=500, detail=str(e))
-
-@app.post("/test/parse")
-async def test_parse(request: Request):
-    try:
-        body = await request.body()
-        email_content = body.decode('utf-8')
-        
-        if not email_content:
-            raise HTTPException(status_code=400, detail="No content")
-        
-        extracted_data = email_parser.parse_email(email_content)
-        
-        return {
-            "status": "success",
-            "extracted_data": extracted_data,
-            "field_count": len(extracted_data)
-        }
-    
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=str(e))
-
-@app.post("/test/full")
-async def test_full(request: Request):
-    if not webhook_client:
-        raise HTTPException(status_code=503, detail="Webhook not configured")
-    
-    try:
-        body = await request.body()
-        email_content = body.decode('utf-8')
-        
-        extracted_data = email_parser.parse_email(email_content)
-        
-        if not email_parser.validate_required_fields(extracted_data):
-            return {
+            return jsonify({
                 "status": "validation_failed",
+                "message": "Missing required fields",
                 "extracted_data": extracted_data
-            }
+            }), 400
         
+        # Send to Lark Base
         success = webhook_client.send_to_lark_base(extracted_data)
         
-        return {
+        return jsonify({
             "status": "success" if success else "error",
-            "message": "Test completed",
+            "message": "Complete workflow tested successfully" if success else "Failed to send to Lark Base",
             "extracted_data": extracted_data,
+            "field_count": len(extracted_data),
             "sent_to_lark": success
-        }
-    
+        })
+        
     except Exception as e:
-        raise HTTPException(status_code=500, detail=str(e))
+        logger.error(f"Error in full workflow test: {str(e)}")
+        return jsonify({"error": str(e)}), 500
 
-if __name__ == "__main__":
-    import uvicorn
-    port = int(os.environ.get("PORT", 8000))
-    uvicorn.run(app, host="0.0.0.0", port=port)
+# Error handlers
+@app.errorhandler(404)
+def not_found(error):
+    return jsonify({"error": "Endpoint not found"}), 404
+
+@app.errorhandler(500)
+def internal_error(error):
+    return jsonify({"error": "Internal server error"}), 500
+
+if __name__ == '__main__':
+    port = int(os.environ.get('PORT', 8000))
+    app.run(host='0.0.0.0', port=port, debug=False)

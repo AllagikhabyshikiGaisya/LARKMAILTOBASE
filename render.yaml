@@ -2,12 +2,8 @@ services:
   - type: web
     name: lark-mail-automation
     env: python
-    region: oregon
-    plan: free
-    buildCommand: |
-      python -m pip install --upgrade pip
-      pip install --no-cache-dir --prefer-binary -r requirements.txt
-    startCommand: gunicorn src.main:app -w 1 -k uvicorn.workers.UvicornWorker --bind 0.0.0.0:$PORT --timeout 120 --preload
+    buildCommand: pip install --no-cache-dir -r requirements.txt
+    startCommand: gunicorn src.main:app --bind 0.0.0.0:$PORT --workers 1 --timeout 120
     envVars:
       - key: PYTHON_VERSION
         value: 3.11.0
@@ -15,7 +11,3 @@ services:
         value: production
       - key: LARK_WEBHOOK_URL
         sync: false
-      - key: WEBHOOK_PATH
-        value: /webhook/lark-mail
-      - key: TEST_EMAIL
-        value: utosabu.adhikari@allagi.jp
