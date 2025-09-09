@@ -1,0 +1,25 @@
+services:
+  - type: web
+    name: lark-mail-automation
+    env: node
+    plan: free
+    buildCommand: npm install
+    startCommand: npm start
+    healthCheckPath: /health
+    envVars:
+      - key: NODE_ENV
+        value: production
+      - key: PORT
+        generateValue: true
+      - key: LARK_APP_ID
+        sync: false
+      - key: LARK_APP_SECRET
+        sync: false
+      - key: LARK_WEBHOOK_SECRET
+        sync: false
+      - key: LARK_BASE_ID
+        sync: false
+      - key: LARK_TABLE_ID
+        sync: false
+      - key: TEST_EMAIL
+        value: utosabu.adhikari@allagi.jp
