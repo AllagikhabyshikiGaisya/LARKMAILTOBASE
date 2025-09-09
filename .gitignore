@@ -1,49 +1,59 @@
-# Dependencies
-node_modules/
-npm-debug.log*
-yarn-debug.log*
-yarn-error.log*
-
 # Environment variables
 .env
 .env.local
 .env.production
 
-# Logs
-*.log
-logs/
-*.log.*
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+build/
+develop-eggs/
+dist/
+downloads/
+eggs/
+.eggs/
+lib/
+lib64/
+parts/
+sdist/
+var/
+wheels/
+*.egg-info/
+.installed.cfg
+*.egg
 
-# Runtime data
-pids/
-*.pid
-*.seed
-*.pid.lock
+# Virtual Environment
+venv/
+ENV/
+env/
+.venv/
 
-# Coverage directory used by tools like istanbul
-coverage/
-.nyc_output
-
-# IDE files
+# IDE
 .vscode/
 .idea/
 *.swp
 *.swo
+*~
 
-# OS generated files
+# Logs
+logs/
+*.log
+
+# OS
 .DS_Store
-.DS_Store?
-._*
-.Spotlight-V100
-.Trashes
-ehthumbs.db
 Thumbs.db
 
-# Build outputs
-dist/
-build/
-out/
+# Test files
+test_*.txt
+debug_*.py
 
-# Temporary folders
-tmp/
-temp/
+test_auth_and_insertion.py
+test_insertion_methods.py
+test_manual_insertion.py
+test_parsing_only.py
+test_webhook_approach.py
+debug_lark_base.py
+test_sample_email.txt

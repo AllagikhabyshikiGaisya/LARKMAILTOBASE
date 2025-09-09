@@ -1,25 +1,17 @@
 services:
   - type: web
     name: lark-mail-automation
-    env: node
-    plan: free
-    buildCommand: npm install
-    startCommand: npm start
-    healthCheckPath: /health
+    env: python
+    buildCommand: pip install -r requirements.txt
+    startCommand: gunicorn src.main:app -w 4 -k uvicorn.workers.UvicornWorker --bind 0.0.0.0:$PORT
     envVars:
-      - key: NODE_ENV
-        value: production
-      - key: PORT
-        generateValue: true
-      - key: LARK_APP_ID
+      - key: PYTHON_VERSION
+        value: 3.11.0
+      - key: LARK_WEBHOOK_URL
         sync: false
-      - key: LARK_APP_SECRET
-        sync: false
-      - key: LARK_WEBHOOK_SECRET
-        sync: false
-      - key: LARK_BASE_ID
-        sync: false
-      - key: LARK_TABLE_ID
-        sync: false
+      - key: SERVER_PORT
+        value: 10000
+      - key: WEBHOOK_PATH
+        value: /webhook/lark-mail
       - key: TEST_EMAIL
         value: utosabu.adhikari@allagi.jp
