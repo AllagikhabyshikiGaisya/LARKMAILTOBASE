@@ -2,34 +2,37 @@ import logging
 import os
 import sys
 from datetime import datetime
-from .config import Config
 
 def setup_logging():
-    """Setup logging configuration for both local and production"""
+    """Setup logging for production and development"""
     
-    # Create logs directory if running locally
-    if not Config.is_production():
-        os.makedirs('logs', exist_ok=True)
-        log_filename = f"logs/lark_mail_automation_{datetime.now().strftime('%Y%m%d')}.log"
-        handlers = [
-            logging.FileHandler(log_filename, encoding='utf-8'),
-            logging.StreamHandler(sys.stdout)
-        ]
+    # Configure basic logging
+    log_format = '%(asctime)s - %(name)s - %(levelname)s - %(message)s'
+    
+    # In production, just use stdout
+    if os.getenv('ENVIRONMENT') == 'production':
+        logging.basicConfig(
+            level=logging.INFO,
+            format=log_format,
+            handlers=[logging.StreamHandler(sys.stdout)]
+        )
     else:
-        # In production, just use stdout (Render will capture this)
-        handlers = [logging.StreamHandler(sys.stdout)]
+        # Local development - file and console
+        os.makedirs('logs', exist_ok=True)
+        log_file = f"logs/app_{datetime.now().strftime('%Y%m%d')}.log"
+        
+        logging.basicConfig(
+            level=logging.INFO,
+            format=log_format,
+            handlers=[
+                logging.FileHandler(log_file, encoding='utf-8'),
+                logging.StreamHandler(sys.stdout)
+            ]
+        )
     
-    # Configure logging
-    logging.basicConfig(
-        level=logging.INFO,
-        format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
-        handlers=handlers
-    )
-    
-    # Set specific loggers
+    # Quiet down some loggers
     logging.getLogger('uvicorn').setLevel(logging.WARNING)
-    logging.getLogger('fastapi').setLevel(logging.WARNING)
+    logging.getLogger('uvicorn.access').setLevel(logging.WARNING)
     
-    # Log startup info
     logger = logging.getLogger(__name__)
-    logger.info(f"Logging initialized for environment: {Config.ENVIRONMENT}")
+    logger.info("Logging initialized")

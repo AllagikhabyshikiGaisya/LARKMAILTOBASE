@@ -1,46 +1,32 @@
 import os
 from dotenv import load_dotenv
 
-# Load environment variables (works locally and on Render)
+# Load environment variables
 load_dotenv()
 
 class Config:
-    # Lark Webhook Configuration
-    LARK_WEBHOOK_URL = os.getenv('LARK_WEBHOOK_URL')
+    # Lark Configuration
+    LARK_WEBHOOK_URL = os.getenv('LARK_WEBHOOK_URL', '').strip()
     
-    # Server Configuration
-    SERVER_PORT = int(os.getenv('PORT', os.getenv('SERVER_PORT', 8000)))  # Render uses PORT
-    WEBHOOK_PATH = os.getenv('WEBHOOK_PATH', '/webhook/lark-mail')
-    
-    # Test Configuration
-    TEST_EMAIL = os.getenv('TEST_EMAIL', 'utosabu.adhikari@allagi.jp')
+    # Server Configuration  
+    SERVER_PORT = int(os.getenv('PORT', os.getenv('SERVER_PORT', 8000)))
+    WEBHOOK_PATH = os.getenv('WEBHOOK_PATH', '/webhook/lark-mail').strip()
     
     # Environment
-    ENVIRONMENT = os.getenv('ENVIRONMENT', 'development')
+    ENVIRONMENT = os.getenv('ENVIRONMENT', 'development').strip()
+    TEST_EMAIL = os.getenv('TEST_EMAIL', 'utosabu.adhikari@allagi.jp').strip()
     
     @classmethod
     def validate(cls):
-        """Validate that all required configuration is present"""
-        required_configs = ['LARK_WEBHOOK_URL']
+        """Validate required configuration"""
+        errors = []
         
-        missing_configs = []
-        for config in required_configs:
-            value = getattr(cls, config)
-            if not value or value.strip() == '':
-                missing_configs.append(config)
+        if not cls.LARK_WEBHOOK_URL:
+            errors.append('LARK_WEBHOOK_URL is required')
         
-        if missing_configs:
-            raise ValueError(f"Missing required configuration: {', '.join(missing_configs)}")
+        if errors:
+            raise ValueError(f"Configuration errors: {'; '.join(errors)}")
     
-    @classmethod
+    @classmethod 
     def is_production(cls):
-        """Check if running in production"""
         return cls.ENVIRONMENT.lower() == 'production'
-    
-    @classmethod
-    def get_base_url(cls):
-        """Get base URL for the application"""
-        if cls.is_production():
-            return os.getenv('RENDER_EXTERNAL_URL', 'https://your-app-name.onrender.com')
-        else:
-            return f'http://localhost:{cls.SERVER_PORT}'
