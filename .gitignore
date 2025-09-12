@@ -57,3 +57,29 @@ test_parsing_only.py
 test_webhook_approach.py
 debug_lark_base.py
 test_sample_email.txt
+
+
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+env/
+venv/
+ENV/
+
+# Credentials
+credentials.json
+token.pickle
+.env
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# OS
+.DS_Store
+Thumbs.db
