@@ -2,6 +2,9 @@ import os
 import re
 import base64
 import pickle
+import json
+import hashlib
+import hmac
 from datetime import datetime, timedelta
 from flask import Flask, request, jsonify
 import requests
@@ -10,6 +13,8 @@ from google_auth_oauthlib.flow import InstalledAppFlow
 from google.auth.transport.requests import Request
 from googleapiclient.discovery import build
 from dotenv import load_dotenv
+import threading
+import time
 
 # Load environment variables from .env file
 load_dotenv()
@@ -17,7 +22,7 @@ load_dotenv()
 app = Flask(__name__)
 
 # Gmail API settings
-SCOPES = ['https://www.googleapis.com/auth/gmail.readonly']
+SCOPES = ['https://www.googleapis.com/auth/gmail.readonly', 'https://www.googleapis.com/auth/gmail.modify']
 GMAIL_CREDENTIALS_FILE = 'credentials.json'
 GMAIL_TOKEN_FILE = 'token.pickle'
 
@@ -27,14 +32,20 @@ LARK_APP_SECRET = os.getenv('LARK_APP_SECRET')
 LARK_BASE_TOKEN = os.getenv('LARK_BASE_TOKEN')
 LARK_TABLE_ID = os.getenv('LARK_TABLE_ID')
 
+# Gmail Push Notification settings
+PUBSUB_TOPIC_NAME = os.getenv('PUBSUB_TOPIC_NAME')  # e.g., "projects/your-project/topics/gmail-topic"
+WEBHOOK_SECRET = os.getenv('WEBHOOK_SECRET', 'your-secret-key')  # For security
+
 
 class EmailProcessor:
     def __init__(self):
         self.gmail_service = None
         self.lark_access_token = None
+        self.processed_messages = set()  # Keep track of processed emails
         print("🔧 Initializing Email Processor...")
         self.initialize_gmail()
         self.get_lark_access_token()
+        self.setup_gmail_watch()
 
     def initialize_gmail(self):
         """Initialize Gmail API service"""
@@ -90,6 +101,32 @@ class EmailProcessor:
 
         except Exception as e:
             print(f"❌ Failed to initialize Gmail: {str(e)}")
+
+    def setup_gmail_watch(self):
+        """Set up Gmail push notifications"""
+        if not self.gmail_service or not PUBSUB_TOPIC_NAME:
+            print("⚠️  Skipping Gmail watch setup - missing service or topic name")
+            return
+
+        try:
+            print("👁️ Setting up Gmail watch for real-time notifications...")
+            
+            request_body = {
+                'topicName': PUBSUB_TOPIC_NAME,
+                'labelIds': ['INBOX'],
+                'labelFilterAction': 'include'
+            }
+            
+            response = self.gmail_service.users().watch(userId='me', body=request_body).execute()
+            print(f"✅ Gmail watch enabled! History ID: {response.get('historyId')}")
+            
+            # Store history ID for future reference
+            with open('gmail_history.txt', 'w') as f:
+                f.write(response.get('historyId', ''))
+                
+        except Exception as e:
+            print(f"❌ Failed to set up Gmail watch: {str(e)}")
+            print("💡 You'll need to set up Pub/Sub manually for real-time notifications")
 
     def get_lark_access_token(self):
         """Get Lark access token"""
@@ -222,8 +259,57 @@ class EmailProcessor:
             print(f"❌ Error storing data: {str(e)}")
             return False
 
-    def get_recent_emails(self, hours_back=24):
-        """Get recent emails from Gmail"""
+    def process_specific_email(self, message_id):
+        """Process a specific email by message ID"""
+        print(f"📧 Processing email ID: {message_id}")
+        
+        if message_id in self.processed_messages:
+            print("⏭️  Email already processed, skipping...")
+            return False
+            
+        if not self.gmail_service:
+            print("❌ Gmail service not available")
+            return False
+
+        try:
+            msg = self.gmail_service.users().messages().get(
+                userId='me', id=message_id
+            ).execute()
+
+            # Check if this is the right type of email
+            subject = ""
+            for header in msg['payload'].get('headers', []):
+                if header['name'] == 'Subject':
+                    subject = header['value']
+                    break
+                    
+            if 'イベントの参加お申し込みがありました' not in subject:
+                print("📪 Email is not a customer inquiry, skipping...")
+                return False
+
+            email_body = self.extract_email_body(msg)
+            if not email_body:
+                print("❌ Could not extract email body")
+                return False
+
+            customer_data = self.parse_customer_info(email_body)
+            if not customer_data.get('name'):
+                print("❌ Could not extract customer name")
+                return False
+
+            success = self.store_in_lark_base(customer_data)
+            if success:
+                self.processed_messages.add(message_id)
+                print(f"✅ Successfully processed email for: {customer_data.get('name')}")
+            
+            return success
+
+        except Exception as e:
+            print(f"❌ Error processing email {message_id}: {str(e)}")
+            return False
+
+    def get_recent_emails(self, hours_back=1):
+        """Get recent emails from Gmail (fallback method)"""
         print(f"📬 Looking for emails from last {hours_back} hours...")
 
         if not self.gmail_service:
@@ -242,22 +328,13 @@ class EmailProcessor:
 
             processed_emails = []
             for i, message in enumerate(messages):
+                if message['id'] in self.processed_messages:
+                    continue
+                    
                 print(f"📨 Processing email {i+1}/{len(messages)}...")
-
-                msg = self.gmail_service.users().messages().get(
-                    userId='me', id=message['id']
-                ).execute()
-
-                email_body = self.extract_email_body(msg)
-                if email_body:
-                    customer_data = self.parse_customer_info(email_body)
-                    if customer_data.get('name'):
-                        processed_emails.append({
-                            'message_id': message['id'],
-                            'customer_data': customer_data,
-                            'email_body': email_body
-                        })
-                        print(f"✅ Email processed for: {customer_data.get('name')}")
+                success = self.process_specific_email(message['id'])
+                if success:
+                    processed_emails.append(message['id'])
 
             return processed_emails
 
@@ -289,7 +366,7 @@ class EmailProcessor:
 
 
 # Initialize the email processor
-print("🚀 Starting Email Parser Application...")
+print("🚀 Starting Real-time Email Parser Application...")
 email_processor = EmailProcessor()
 
 
@@ -297,11 +374,13 @@ email_processor = EmailProcessor()
 @app.route('/')
 def home():
     return jsonify({
-        "status": "✅ Email Parser is running!",
+        "status": "✅ Real-time Email Parser is running!",
+        "mode": "🚀 INSTANT PROCESSING",
         "timestamp": datetime.now().isoformat(),
         "available_endpoints": {
             "/health": "Check system status",
-            "/process-emails": "Process recent emails",
+            "/webhook": "Gmail push notification webhook",
+            "/process-emails": "Manual email processing",
             "/test-parse": "Test parsing with sample data"
         }
     })
@@ -323,47 +402,80 @@ def health_check():
         status["lark"] = "❌ Not connected"
         status["status"] = "unhealthy"
 
+    status["processed_count"] = len(email_processor.processed_messages)
     return jsonify(status)
+
+
+@app.route('/webhook', methods=['POST'])
+def gmail_webhook():
+    """Handle Gmail push notifications"""
+    print("\n" + "🔔" * 30)
+    print("INSTANT EMAIL NOTIFICATION RECEIVED!")
+    print("🔔" * 30)
+    
+    try:
+        # Verify the request (basic security)
+        if request.headers.get('User-Agent', '').startswith('APIs-Google'):
+            print("✅ Verified Google API request")
+        
+        # Get the notification data
+        data = request.get_json()
+        if not data:
+            print("❌ No data in webhook request")
+            return "No data", 400
+            
+        print(f"📧 Webhook data: {data}")
+        
+        # Extract message from Pub/Sub format
+        if 'message' in data:
+            message_data = data['message']
+            if 'data' in message_data:
+                # Decode the base64 data
+                decoded_data = base64.b64decode(message_data['data']).decode('utf-8')
+                gmail_data = json.loads(decoded_data)
+                
+                print(f"📨 Gmail notification: {gmail_data}")
+                
+                # Check recent emails immediately
+                threading.Thread(target=process_new_emails_async).start()
+                
+        return "OK", 200
+        
+    except Exception as e:
+        print(f"❌ Webhook error: {str(e)}")
+        return f"Error: {str(e)}", 500
+
+
+def process_new_emails_async():
+    """Process new emails in background thread"""
+    print("🚀 Processing new emails immediately...")
+    try:
+        email_processor.get_recent_emails(hours_back=0.5)  # Check last 30 minutes
+    except Exception as e:
+        print(f"❌ Async processing error: {str(e)}")
 
 
 @app.route('/process-emails', methods=['GET', 'POST'])
 def process_emails():
+    """Manual email processing (fallback method)"""
     print("\n" + "="*50)
-    print("🔄 PROCESSING EMAILS")
+    print("🔄 MANUAL EMAIL PROCESSING")
     print("="*50)
 
     try:
-        recent_emails = email_processor.get_recent_emails(hours_back=24)
+        processed_emails = email_processor.get_recent_emails(hours_back=1)
 
-        if not recent_emails:
+        if not processed_emails:
             return jsonify({
                 "status": "success",
                 "message": "No new emails found to process",
                 "processed_count": 0
             })
 
-        results = []
-        success_count = 0
-
-        for email_data in recent_emails:
-            customer_data = email_data['customer_data']
-            success = email_processor.store_in_lark_base(customer_data)
-            if success:
-                success_count += 1
-
-            results.append({
-                "customer_name": customer_data.get('name', 'Unknown'),
-                "customer_email": customer_data.get('email', 'Unknown'),
-                "stored_successfully": success
-            })
-
-        print(f"✅ Processing complete: {success_count}/{len(results)} stored successfully")
-
         return jsonify({
             "status": "success",
-            "processed_emails": len(results),
-            "successful_stores": success_count,
-            "results": results
+            "processed_emails": len(processed_emails),
+            "message": f"Processed {len(processed_emails)} new emails"
         })
 
     except Exception as e:
@@ -396,6 +508,7 @@ def test_parse():
 
 if __name__ == '__main__':
     port = int(os.environ.get('PORT', 5000))
-    print(f"\n🌐 Starting web server on port {port}")
+    print(f"\n🌐 Starting REAL-TIME web server on port {port}")
+    print("⚡ Emails will be processed INSTANTLY when they arrive!")
     print("Press Ctrl+C to stop")
-    app.run(debug=False, host='0.0.0.0', port=port)  # debug=False for production
+    app.run(debug=False, host='0.0.0.0', port=port)
