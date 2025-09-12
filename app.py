@@ -13,8 +13,6 @@ from google_auth_oauthlib.flow import InstalledAppFlow
 from google.auth.transport.requests import Request
 from googleapiclient.discovery import build
 from dotenv import load_dotenv
-import threading
-import time
 
 # Load environment variables from .env file
 load_dotenv()
@@ -308,16 +306,16 @@ class EmailProcessor:
             print(f"❌ Error processing email {message_id}: {str(e)}")
             return False
 
-    def get_recent_emails(self, hours_back=1):
+    def get_recent_emails(self, minutes_back=5):
         """Get recent emails from Gmail (fallback method)"""
-        print(f"📬 Looking for emails from last {hours_back} hours...")
+        print(f"📬 Looking for emails from last {minutes_back} minutes...")
 
         if not self.gmail_service:
             print("❌ Gmail service not available")
             return []
 
         try:
-            query = 'subject:"イベントの参加お申し込みがありました"'
+            query = f'subject:"イベントの参加お申し込みがありました" newer_than:{minutes_back}m'
 
             results = self.gmail_service.users().messages().list(
                 userId='me', q=query, maxResults=10
@@ -366,7 +364,7 @@ class EmailProcessor:
 
 
 # Initialize the email processor
-print("🚀 Starting Real-time Email Parser Application...")
+print("🚀 Starting Instant Email Parser Application...")
 email_processor = EmailProcessor()
 
 
@@ -374,8 +372,8 @@ email_processor = EmailProcessor()
 @app.route('/')
 def home():
     return jsonify({
-        "status": "✅ Real-time Email Parser is running!",
-        "mode": "🚀 INSTANT PROCESSING",
+        "status": "✅ Instant Email Parser is running!",
+        "mode": "⚡ INSTANT PROCESSING",
         "timestamp": datetime.now().isoformat(),
         "available_endpoints": {
             "/health": "Check system status",
@@ -408,7 +406,7 @@ def health_check():
 
 @app.route('/webhook', methods=['POST'])
 def gmail_webhook():
-    """Handle Gmail push notifications"""
+    """Handle Gmail push notifications - INSTANT PROCESSING"""
     print("\n" + "🔔" * 30)
     print("INSTANT EMAIL NOTIFICATION RECEIVED!")
     print("🔔" * 30)
@@ -436,23 +434,14 @@ def gmail_webhook():
                 
                 print(f"📨 Gmail notification: {gmail_data}")
                 
-                # Check recent emails immediately
-                threading.Thread(target=process_new_emails_async).start()
+                # INSTANT PROCESSING: Check for new emails immediately
+                email_processor.get_recent_emails(minutes_back=5)
                 
         return "OK", 200
         
     except Exception as e:
         print(f"❌ Webhook error: {str(e)}")
         return f"Error: {str(e)}", 500
-
-
-def process_new_emails_async():
-    """Process new emails in background thread"""
-    print("🚀 Processing new emails immediately...")
-    try:
-        email_processor.get_recent_emails(hours_back=0.5)  # Check last 30 minutes
-    except Exception as e:
-        print(f"❌ Async processing error: {str(e)}")
 
 
 @app.route('/process-emails', methods=['GET', 'POST'])
@@ -463,7 +452,7 @@ def process_emails():
     print("="*50)
 
     try:
-        processed_emails = email_processor.get_recent_emails(hours_back=1)
+        processed_emails = email_processor.get_recent_emails(minutes_back=60)
 
         if not processed_emails:
             return jsonify({
@@ -508,7 +497,7 @@ def test_parse():
 
 if __name__ == '__main__':
     port = int(os.environ.get('PORT', 5000))
-    print(f"\n🌐 Starting REAL-TIME web server on port {port}")
+    print(f"\n🌐 Starting INSTANT web server on port {port}")
     print("⚡ Emails will be processed INSTANTLY when they arrive!")
     print("Press Ctrl+C to stop")
     app.run(debug=False, host='0.0.0.0', port=port)
